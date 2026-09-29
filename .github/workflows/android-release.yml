@@ -82,15 +82,15 @@ jobs:
 
       - name: Build release APK
         run: |
-          java -jar bob.jar \
+          java --enable-native-access=ALL-UNNAMED -jar bob.jar \
             --platform arm64-android \
             --architectures armv7-android,arm64-android \
             --variant release \
             --strip-executable \
             --archive \
             --bundle-format apk \
-            --bundle-output build/bundle \
-            --build-report-json build/report.json \
+            --bundle-output dist/bundle \
+            --build-report-json dist/report.json \
             --settings "$RUNNER_TEMP/version.ini" \
             ${{ steps.keystore.outputs.args }} \
             resolve distclean build bundle
@@ -98,8 +98,8 @@ jobs:
       - name: Rename APK
         id: apk
         run: |
-          src=$(find build/bundle -name '*.apk' | head -n 1)
-          dst="build/SecretWord-${GITHUB_REF_NAME}.apk"
+          src=$(find dist/bundle -name '*.apk' | head -n 1)
+          dst="dist/SecretWord-${GITHUB_REF_NAME}.apk"
           mv "$src" "$dst"
           echo "path=$dst" >> "$GITHUB_OUTPUT"
 

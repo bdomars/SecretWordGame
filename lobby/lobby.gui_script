@@ -19,24 +19,50 @@ local LEFT_MESSAGES = {
 	["disconnected"] = "%s disconnected",
 }
 
+-- How each editable game setting is shown: popup title/hint, chip text and option text
+local function duration(seconds)
+	return seconds < 60 and (seconds .. " s") or (math.floor(seconds / 60) .. " min")
+end
+
+local SETTING_TEXTS = {
+	rounds = {
+		title = "Rounds", hint = "How many rounds to play.",
+		chip = function(v) return v .. " rounds" end,
+		option = function(v) return tostring(v) end,
+	},
+	clue_time = {
+		title = "Time per clue", hint = "How long each player has to give their clue.",
+		chip = function(v) return v .. " s per clue" end,
+		option = function(v) return v .. " s" end,
+	},
+	discuss_time = {
+		title = "Discussion", hint = "Talk time before voting opens.",
+		chip = function(v) return duration(v) .. " discussion" end,
+		option = duration,
+	},
+}
+
 ---------------------------------------------------------------------------
--- Player name (saved between launches)
+-- Player name and host settings (saved between launches, in one file)
 ---------------------------------------------------------------------------
 
 local function utf8_len(s)
 	return #s:gsub("[\128-\191]", "")
 end
 
-local function load_name()
+local function load_saved(self)
 	local saved = sys.load(SAVE_FILE)
 	if type(saved.name) == "string" and saved.name ~= "" then
-		return saved.name
+		self.name = saved.name
+	else
+		self.name = "Player " .. math.random(10, 99)
 	end
-	return "Player " .. math.random(10, 99)
+	self.host_settings = secret_word.settings(saved.settings)
 end
 
-local function save_name(name)
-	sys.save(SAVE_FILE, { name = name })
+-- sys.save replaces the whole file, so always write everything
+local function persist(self)
+	sys.save(SAVE_FILE, { name = self.name, settings = self.host_settings })
 end
 
 ---------------------------------------------------------------------------
@@ -70,7 +96,7 @@ local function finish_editing(self)
 	local name = (self.draft .. (self.marked or "")):match("^%s*(.-)%s*$")
 	if name ~= "" then
 		self.name = name
-		save_name(name)
+		persist(self)
 	end
 	show_menu(self, self.message)
 end
@@ -78,6 +104,7 @@ end
 function show_menu(self, message)
 	net.stop()
 	self.game = nil
+	self.popup = nil
 	self.screen = "menu"
 	self.players = {}
 	self.message = message
@@ -115,6 +142,7 @@ function show_menu(self, message)
 	ui.button(self, "Host a game", PAD, BOTTOM_Y - BUTTON_H - 12, CW, BUTTON_H, function()
 		local ok, err = net.host(self.name)
 		if ok then
+			net.set_settings(self.host_settings)
 			show_lobby(self)
 		else
 			show_menu(self, err)
@@ -148,6 +176,7 @@ function show_scan(self, hosts)
 		ui.on_tap(self, tile, function()
 			local ok, err = net.join(h.ip, h.port, self.name)
 			if ok then
+				self.settings = nil -- the host sends its settings right after we join
 				show_lobby(self)
 			else
 				show_menu(self, err)
@@ -158,22 +187,66 @@ function show_scan(self, hosts)
 	ui.button(self, "Back", PAD, BOTTOM_Y, CW, BUTTON_H, function() show_menu(self) end, { style = "secondary" })
 end
 
--- Pill-shaped chips that wrap onto new rows; returns the bottom y
-local function chips(self, labels, top)
+-- Pill-shaped chips that wrap onto new rows; items: { text, on_tap (optional) }.
+-- Tappable chips get an accent outline. Returns the bottom y.
+local function chips(self, items, top)
 	local x, y = PAD, top
-	for _, text in ipairs(labels) do
-		local n = ui.label(self, text, 0, 0, { size = 14 })
+	for _, item in ipairs(items) do
+		local n = ui.label(self, item.text, 0, 0, { size = 14 })
 		local w = ui.text_width(n) + 28
 		gui.delete_node(n)
 		table.remove(self.nodes)
 		if x + w > ui.W - PAD then
 			x, y = PAD, y + 44
 		end
-		ui.rect(self, x, y, w, 36, { color = ui.SURFACE, radius = 18 })
-		ui.label(self, text, x + w / 2, y + 18, { size = 14, align = "center" })
+		local chip = ui.rect(self, x, y, w, 36, { color = ui.SURFACE, radius = 18 })
+		if item.on_tap then
+			ui.rect(self, x, y, w, 36, { color = ui.ACCENT, radius = 18, outline = true })
+			ui.on_tap(self, chip, item.on_tap)
+		end
+		ui.label(self, item.text, x + w / 2, y + 18, { size = 14, align = "center" })
 		x = x + w + 8
 	end
 	return y + 36
+end
+
+-- Bottom sheet for picking one setting's value (host only)
+local function settings_popup(self, key)
+	local choice
+	for _, c in ipairs(secret_word.CHOICES) do
+		if c.key == key then
+			choice = c
+		end
+	end
+	local texts = SETTING_TEXTS[key]
+	local function close()
+		self.popup = nil
+		show_lobby(self)
+	end
+
+	-- While the popup is open, only it reacts to taps
+	self.buttons = {}
+	local backdrop = ui.rect(self, 0, 0, ui.W, ui.H, { color = vmath.vector4(0, 0, 0, 0.6) })
+	local top = 520
+	local sheet = ui.rect(self, 0, top, ui.W, ui.H - top + 40, { color = ui.SURFACE, radius = 28 })
+	ui.label(self, texts.title, PAD, top + 44, { font = "heading", size = 26 })
+	ui.label(self, texts.hint, PAD, top + 76, { size = 14, color = ui.DIM })
+
+	local n, gap = #choice.options, 8
+	local w = (CW - gap * (n - 1)) / n
+	for i, option in ipairs(choice.options) do
+		local selected = self.host_settings[key] == option
+		ui.button(self, texts.option(option), PAD + (i - 1) * (w + gap), top + 104, w, 56, function()
+			self.host_settings[key] = option
+			self.popup = nil
+			persist(self)
+			net.set_settings(self.host_settings) -- shows the lobby again via the "settings" event
+		end, { style = selected and "primary" or "tile", size = 17 })
+	end
+	ui.button(self, "Cancel", PAD, BOTTOM_Y, CW, BUTTON_H, close, { style = "secondary" })
+
+	ui.on_tap(self, sheet, function() end) -- taps on the sheet itself don't close it
+	ui.on_tap(self, backdrop, close)
 end
 
 function show_lobby(self)
@@ -215,14 +288,24 @@ function show_lobby(self)
 		end
 	end
 
-	local s = secret_word.SETTINGS
+	-- Host: its own settings (tap a chip to change). Clients: whatever the host sent.
+	local s = hosting and self.host_settings or self.settings or secret_word.settings()
 	ui.label(self, "Game settings", PAD, 500, { font = "bold", size = 15 })
-	chips(self, {
-		("%d rounds"):format(s.rounds),
-		("%d s per clue"):format(s.clue_time),
-		("%d min discussion"):format(s.discuss_time / 60),
-		"1 impostor",
-	}, 518)
+	if hosting then
+		ui.label(self, "Tap to change", ui.W - PAD, 500, { size = 13, color = ui.DIM, align = "right" })
+	end
+	local items = {}
+	for _, choice in ipairs(secret_word.CHOICES) do
+		items[#items + 1] = {
+			text = SETTING_TEXTS[choice.key].chip(s[choice.key]),
+			on_tap = hosting and function()
+				self.popup = choice.key
+				show_lobby(self)
+			end or nil,
+		}
+	end
+	items[#items + 1] = { text = "1 impostor" }
+	chips(self, items, 518)
 
 	if hosting then
 		ui.label(self, "Others join from the same Wi-Fi: " .. table.concat(net.local_ips(), ", "), CX, 728, { size = 13, color = ui.DIM, align = "center" })
@@ -231,6 +314,10 @@ function show_lobby(self)
 			PAD, BOTTOM_Y, CW, BUTTON_H, function() net.start_game() end, { enabled = enough })
 	else
 		ui.label(self, "Waiting for the host to start…", CX, BOTTOM_Y + BUTTON_H / 2, { size = 15, color = ui.DIM, align = "center" })
+	end
+
+	if hosting and self.popup then
+		settings_popup(self, self.popup)
 	end
 end
 
@@ -255,7 +342,8 @@ local function on_net(self, event, data)
 	elseif event == "start" then
 		-- Only the host runs the rules; everyone (host included) then gets "game" views
 		if net.is_host() then
-			self.game = secret_word.new(self.players, function(id, view) net.send_to(id, view) end)
+			self.popup = nil
+			self.game = secret_word.new(self.players, function(id, view) net.send_to(id, view) end, self.host_settings)
 		end
 	elseif event == "action" then
 		if self.game then
@@ -265,6 +353,11 @@ local function on_net(self, event, data)
 		screens.render(self, data)
 	elseif event == "to_lobby" then
 		show_lobby(self)
+	elseif event == "settings" then
+		self.settings = secret_word.settings(data)
+		if self.screen == "lobby" then
+			show_lobby(self)
+		end
 	elseif event == "player_left" then
 		local fmt = LEFT_MESSAGES[data.reason] or "%s left"
 		ui.toast(self, fmt:format(data.name), ui.player_color(data.color).fill)
@@ -292,7 +385,7 @@ function init(self)
 
 	msg.post(".", "acquire_input_focus")
 	math.randomseed(os.time())
-	self.name = load_name()
+	load_saved(self)
 
 	ui.init_overlays(self)
 	net.set_listener(function(event, data) on_net(self, event, data) end)

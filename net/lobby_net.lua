@@ -17,7 +17,7 @@ M.DISCOVERY_PORT = 47801
 M.MAX_PLAYERS = 8
 M.NUM_COLORS = 8 -- colors are indices 1..NUM_COLORS; the UI decides what they look like
 
-local PROTOCOL = "LTG3"
+local PROTOCOL = "LTG4"
 local PROBE = PROTOCOL .. "?"
 local HEARTBEAT_INTERVAL = 1.0
 local WARN_AFTER = 2.5 -- silence before a client reports an unstable connection
@@ -36,6 +36,7 @@ local peers = {} -- list of connections; joined ones have .id, .name and .color
 local next_id = 2
 local started = false
 local host_color = 1
+local settings = nil -- game settings shown in the lobby; opaque to this module
 
 -- scan state
 local scanner
@@ -226,6 +227,9 @@ local function host_handle(c, msg)
 			c.color = next_free_color(0, c)
 			next_id = next_id + 1
 			queue(c, { t = "welcome", id = c.id })
+			if settings then
+				queue(c, { t = "settings", settings = settings })
+			end
 			lobby_changed()
 		end
 	elseif msg.t == "color" and c.id and not started then
@@ -330,7 +334,7 @@ function M.host(name)
 	end
 
 	server, discovery = s, u
-	peers, next_id, started, heartbeat_timer, host_color = {}, 2, false, 0, 1
+	peers, next_id, started, heartbeat_timer, host_color, settings = {}, 2, false, 0, 1, nil
 	mode = "host"
 	lobby_changed()
 	return true
@@ -346,6 +350,16 @@ function M.start_game()
 end
 
 -- Host: game over, everyone back to the lobby (which opens for joining again).
+-- Host: share the game settings with everyone in the lobby (and anyone who joins later).
+function M.set_settings(s)
+	if mode ~= "host" then
+		return
+	end
+	settings = s
+	broadcast({ t = "settings", settings = s })
+	emit("settings", s)
+end
+
 function M.end_game()
 	if mode ~= "host" then
 		return
@@ -468,6 +482,8 @@ local function client_update(dt)
 			emit("game", msg.data)
 		elseif msg.t == "to_lobby" then
 			emit("to_lobby")
+		elseif msg.t == "settings" then
+			emit("settings", msg.settings)
 		elseif msg.t == "left" then
 			emit("player_left", msg)
 		elseif msg.t == "reject" then
@@ -562,6 +578,7 @@ end
 --   "action"       host only: { from = player id, data } sent with M.act()
 --   "game"         game data for this player, sent by the host with M.send_to()
 --   "to_lobby"     game over, back to the lobby
+--   "settings"     the host's game settings (host: from M.set_settings; clients: when received)
 --   "player_left"  { id, name, color, reason } reason: "left" | "lost connection" | "disconnected"
 --   "connection"   { stable = bool } client only; silence from host > WARN_AFTER, or recovered
 --   "disconnected" reason string; we are no longer in a game

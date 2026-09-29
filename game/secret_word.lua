@@ -12,6 +12,7 @@ local HOST_ID = 1
 
 M.MIN_PLAYERS = 3
 
+-- Defaults. The host can change the ones listed in M.CHOICES from the lobby.
 M.SETTINGS = {
 	rounds = 3,
 	clue_time = 30,     -- seconds per clue
@@ -20,6 +21,31 @@ M.SETTINGS = {
 	guess_time = 20,    -- the caught impostor's last guess
 	guess_choices = 8,  -- words to pick from when guessing
 }
+
+-- Host-editable settings and their allowed values (the lobby shows them in this order)
+M.CHOICES = {
+	{ key = "rounds", options = { 3, 4, 5, 6 } },
+	{ key = "clue_time", options = { 15, 30, 45 } },
+	{ key = "discuss_time", options = { 30, 60, 120, 300 } },
+}
+
+-- Full settings from possibly partial or invalid input (e.g. an old save file):
+-- editable values must be one of their options, everything else comes from the defaults.
+function M.settings(input)
+	input = type(input) == "table" and input or {}
+	local s = {}
+	for k, v in pairs(M.SETTINGS) do
+		s[k] = v
+	end
+	for _, choice in ipairs(M.CHOICES) do
+		for _, option in ipairs(choice.options) do
+			if input[choice.key] == option then
+				s[choice.key] = option
+			end
+		end
+	end
+	return s
+end
 
 M.SCORING = {
 	correct_vote = 1,     -- every player who voted for the impostor, whatever the outcome
@@ -31,10 +57,10 @@ M.SCORING = {
 local Game = {}
 Game.__index = Game
 
--- players: lobby list { id, name, color }; send(player_id, view)
+-- players: lobby list { id, name, color }; send(player_id, view); settings: see M.settings()
 function M.new(players, send, settings)
 	local g = setmetatable({}, Game)
-	g.settings = settings or M.SETTINGS
+	g.settings = M.settings(settings)
 	g.send = send
 	g.players = {}
 	for _, p in ipairs(players) do

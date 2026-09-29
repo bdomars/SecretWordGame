@@ -160,11 +160,10 @@ function render.clues(self, v)
 		ui.label(self, status, ui.W - PAD - 14, y + 20, { size = 13, color = now and ui.ACCENT or ui.DIM, align = "right" })
 	end
 
-	local function done() net.act({ a = "done", turn = v.current }) end
 	if my_turn then
-		ui.button(self, "Done, next player", PAD, BOTTOM_Y, CW, BUTTON_H, done)
-	elseif net.is_host() then
-		ui.button(self, "Skip " .. name(v, speaker), PAD, BOTTOM_Y, CW, BUTTON_H, done, { style = "secondary" })
+		ui.button(self, "Done, next player", PAD, BOTTOM_Y, CW, BUTTON_H, function()
+			net.act({ a = "done", turn = v.current })
+		end)
 	end
 end
 

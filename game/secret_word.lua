@@ -235,10 +235,9 @@ function Game:on_action(from, data)
 		if self:all_in(self.ready) then self:start_clues() else self:publish() end
 
 	elseif phase == "clues" and a == "done" then
-		-- The speaker ends their own turn; the host may skip someone. `turn` stops a
-		-- double tap (or speaker + host at once) from skipping two players.
-		local speaker = self.order[self.current]
-		if data.turn == self.current and (from == speaker or from == HOST_ID) then
+		-- Only the speaker ends their turn (otherwise the clue timer does).
+		-- `turn` stops a double tap from skipping the next player too.
+		if data.turn == self.current and from == self.order[self.current] then
 			self:next_speaker()
 		end
 

@@ -1,0 +1,110 @@
+name: Android Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  # Defold 1.13.1 — keep in sync with the editor version used locally.
+  DEFOLD_SHA1: 574678c7d44be490d874fbed2d0ae6211feec4d9
+  JAVA_VERSION: "25"
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Cache bob.jar
+        id: cache-bob
+        uses: actions/cache@v4
+        with:
+          path: bob.jar
+          key: bob-${{ env.DEFOLD_SHA1 }}
+
+      - name: Download bob.jar
+        if: steps.cache-bob.outputs.cache-hit != 'true'
+        run: curl -fsSL -o bob.jar "https://d.defold.com/archive/stable/${DEFOLD_SHA1}/bob/bob.jar"
+
+      - name: Stamp version from tag
+        # v1.2.3 -> version 1.2.3, version_code 10203 (minor and patch must stay below 100).
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::Tag '$GITHUB_REF_NAME' is not a semantic version (vMAJOR.MINOR.PATCH)."
+            exit 1
+          fi
+          major=${BASH_REMATCH[1]} minor=${BASH_REMATCH[2]} patch=${BASH_REMATCH[3]}
+          if (( 10#$minor >= 100 || 10#$patch >= 100 )); then
+            echo "::error::Minor and patch must be below 100 to fit the version_code scheme."
+            exit 1
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          version_code=$(( 10#$major * 10000 + 10#$minor * 100 + 10#$patch ))
+          cat > "$RUNNER_TEMP/version.ini" <<EOF
+          [project]
+          version = $version
+
+          [android]
+          version_code = $version_code
+          EOF
+          echo "Stamping version $version (version_code $version_code)"
+
+      - name: Prepare signing keystore
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::ANDROID_KEYSTORE_BASE64 not set; APK will be signed with Defold's debug key."
+            echo "args=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          printf '%s' "$KEYSTORE_PASSWORD" > "$RUNNER_TEMP/keystore.pass"
+          printf '%s' "${KEY_PASSWORD:-$KEYSTORE_PASSWORD}" > "$RUNNER_TEMP/key.pass"
+          args="--keystore $RUNNER_TEMP/release.keystore --keystore-pass $RUNNER_TEMP/keystore.pass --key-pass $RUNNER_TEMP/key.pass"
+          if [ -n "$KEYSTORE_ALIAS" ]; then
+            args="$args --keystore-alias $KEYSTORE_ALIAS"
+          fi
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        run: |
+          java -jar bob.jar \
+            --platform arm64-android \
+            --architectures armv7-android,arm64-android \
+            --variant release \
+            --strip-executable \
+            --archive \
+            --bundle-format apk \
+            --bundle-output build/bundle \
+            --build-report-json build/report.json \
+            --settings "$RUNNER_TEMP/version.ini" \
+            ${{ steps.keystore.outputs.args }} \
+            resolve distclean build bundle
+
+      - name: Rename APK
+        id: apk
+        run: |
+          src=$(find build/bundle -name '*.apk' | head -n 1)
+          dst="build/SecretWord-${GITHUB_REF_NAME}.apk"
+          mv "$src" "$dst"
+          echo "path=$dst" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.apk.outputs.path }}
+          generate_release_notes: true

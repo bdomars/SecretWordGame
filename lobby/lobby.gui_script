@@ -1,38 +1,17 @@
--- Lobby PoC UI. Nodes are created in code so the layout is easy to read and change.
+-- Menu (with name entry), host discovery and lobby, plus running Secret Word.
+-- Networking: net/lobby_net.lua. Game rules (host only): game/secret_word.lua.
+-- Game screens: game/screens.lua. Shared GUI helpers and layout units: ui/ui.lua.
 
 local net = require "net.lobby_net"
+local ui = require "ui.ui"
+local secret_word = require "game.secret_word"
+local screens = require "game.screens"
 
-local WIDTH, HEIGHT = 640, 1136
-local CENTER_X = WIDTH / 2
-
-local BUTTON_COLOR = vmath.vector4(0.22, 0.25, 0.32, 1) -- neutral, so it doesn't clash with player colors
-local DIM_COLOR = vmath.vector4(0.75, 0.75, 0.75, 1)
-local ERROR_COLOR = vmath.vector4(1, 0.45, 0.4, 1)
-
--- Player colors, indexed by the color number the host assigns (1..net.NUM_COLORS)
-local PLAYER_COLORS = {
-	{ name = "Red",    rgb = vmath.vector4(0.92, 0.20, 0.20, 1) },
-	{ name = "Blue",   rgb = vmath.vector4(0.20, 0.45, 1.00, 1) },
-	{ name = "Green",  rgb = vmath.vector4(0.20, 0.80, 0.30, 1) },
-	{ name = "Yellow", rgb = vmath.vector4(1.00, 0.85, 0.10, 1) },
-	{ name = "Pink",   rgb = vmath.vector4(1.00, 0.45, 0.75, 1) },
-	{ name = "Orange", rgb = vmath.vector4(1.00, 0.55, 0.10, 1) },
-	{ name = "Purple", rgb = vmath.vector4(0.60, 0.35, 0.90, 1) },
-	{ name = "Cyan",   rgb = vmath.vector4(0.20, 0.85, 0.90, 1) },
-}
-
-local function player_color(index)
-	return PLAYER_COLORS[index] or { name = "?", rgb = vmath.vector4(1, 1, 1, 1) }
-end
-
-local MARKER_SIZE = 48
-local MARKER_LIFETIME = 2.0
-
-local TOAST_Y = 200 -- newest toast; older ones move up
-local TOAST_SPACING = 48
-local TOAST_LIFETIME = 3.0
-local TOAST_BG = vmath.vector4(0.08, 0.08, 0.1, 0.85)
-local WARNING_COLOR = vmath.vector4(0.95, 0.55, 0.1, 1)
+local PAD, CW = ui.PAD, ui.CONTENT_W
+local CX = ui.W / 2
+local BOTTOM_Y, BUTTON_H = 756, 56
+local MAX_NAME_LENGTH = 12
+local SAVE_FILE = sys.get_save_file("secret_word", "settings")
 
 local LEFT_MESSAGES = {
 	["left"] = "%s left",
@@ -41,113 +20,99 @@ local LEFT_MESSAGES = {
 }
 
 ---------------------------------------------------------------------------
--- UI helpers
+-- Player name (saved between launches)
 ---------------------------------------------------------------------------
 
-local function clear(self)
-	for _, n in ipairs(self.nodes) do
-		gui.delete_node(n) -- also deletes children
-	end
-	for n in pairs(self.markers) do
-		gui.delete_node(n)
-	end
-	self.nodes = {}
-	self.buttons = {}
-	self.markers = {}
+local function utf8_len(s)
+	return #s:gsub("[\128-\191]", "")
 end
 
-local function text(self, str, y, scale, color)
-	local n = gui.new_text_node(vmath.vector3(CENTER_X, y, 0), str)
-	gui.set_font(n, "default")
-	scale = scale or 2
-	gui.set_scale(n, vmath.vector3(scale, scale, 1))
-	if color then
-		gui.set_color(n, color)
+local function load_name()
+	local saved = sys.load(SAVE_FILE)
+	if type(saved.name) == "string" and saved.name ~= "" then
+		return saved.name
 	end
-	self.nodes[#self.nodes + 1] = n
-	return n
+	return "Player " .. math.random(10, 99)
 end
 
-local function button(self, str, y, on_click)
-	local box = gui.new_box_node(vmath.vector3(CENTER_X, y, 0), vmath.vector3(460, 90, 0))
-	gui.set_color(box, BUTTON_COLOR)
-	local label = gui.new_text_node(vmath.vector3(0, 0, 0), str)
-	gui.set_font(label, "default")
-	gui.set_scale(label, vmath.vector3(2, 2, 1))
-	gui.set_parent(label, box)
-	self.nodes[#self.nodes + 1] = box
-	self.buttons[#self.buttons + 1] = { node = box, on_click = on_click }
-	return box
-end
-
----------------------------------------------------------------------------
--- Overlays: toasts and the connection banner. They live outside self.nodes so
--- they survive screen redraws (a player leaving also redraws the lobby).
----------------------------------------------------------------------------
-
--- Nodes created later draw on top, so move overlays up again after a redraw.
-local function raise_overlays(self)
-	for _, t in ipairs(self.toasts) do
-		gui.move_above(t.node, nil)
-	end
-	gui.move_above(self.banner, nil)
-end
-
-local function toast(self, message, color)
-	for _, t in ipairs(self.toasts) do
-		t.y = t.y + TOAST_SPACING
-		gui.animate(t.node, "position.y", t.y, gui.EASING_OUTQUAD, 0.15)
-	end
-
-	local bg = gui.new_box_node(vmath.vector3(CENTER_X, TOAST_Y, 0), vmath.vector3(560, 42, 0))
-	gui.set_color(bg, TOAST_BG)
-	local label = gui.new_text_node(vmath.vector3(0, 0, 0), message)
-	gui.set_font(label, "default")
-	gui.set_scale(label, vmath.vector3(1.8, 1.8, 1))
-	gui.set_color(label, color or vmath.vector4(1, 1, 1, 1))
-	gui.set_parent(label, bg)
-	gui.set_inherit_alpha(label, true)
-
-	local entry = { node = bg, y = TOAST_Y }
-	self.toasts[#self.toasts + 1] = entry
-	gui.animate(bg, "color.w", 0, gui.EASING_INQUAD, 0.5, TOAST_LIFETIME, function()
-		gui.delete_node(bg)
-		for i, t in ipairs(self.toasts) do
-			if t == entry then
-				table.remove(self.toasts, i)
-				break
-			end
-		end
-	end)
-end
-
-local function set_banner(self, visible)
-	gui.set_enabled(self.banner, visible)
+local function save_name(name)
+	sys.save(SAVE_FILE, { name = name })
 end
 
 ---------------------------------------------------------------------------
 -- Screens
 ---------------------------------------------------------------------------
 
-local show_menu, show_scan, show_lobby, show_game
+local show_menu, show_scan, show_lobby
+
+local function header(self, overline, title, subtitle)
+	ui.label(self, overline, PAD, 64, { font = "bold", size = 13, color = ui.ACCENT })
+	ui.label(self, title, PAD, 104, { font = "heading", size = 40 })
+	if subtitle then
+		ui.label(self, subtitle, PAD, 130, { size = 15, color = ui.DIM, width = CW, top = true })
+	end
+end
+
+local function start_editing(self)
+	self.editing = true
+	self.draft = self.name
+	self.marked = ""
+	gui.show_keyboard(gui.KEYBOARD_TYPE_DEFAULT, false)
+	show_menu(self, self.message)
+end
+
+local function finish_editing(self)
+	if not self.editing then
+		return
+	end
+	self.editing = false
+	gui.hide_keyboard()
+	local name = (self.draft .. (self.marked or "")):match("^%s*(.-)%s*$")
+	if name ~= "" then
+		self.name = name
+		save_name(name)
+	end
+	show_menu(self, self.message)
+end
 
 function show_menu(self, message)
 	net.stop()
+	self.game = nil
 	self.screen = "menu"
 	self.players = {}
-	set_banner(self, false)
-	clear(self)
+	self.message = message
+	ui.set_banner(self, false)
+	ui.clear(self)
 
-	text(self, "LAN Lobby PoC", 1010, 3)
-	text(self, "You are: " .. self.name, 930)
-	local ips = net.local_ips()
-	if #ips > 0 then
-		text(self, "IP: " .. table.concat(ips, ", "), 885, 1.5, DIM_COLOR)
+	header(self, "LOCAL PARTY GAME", "Secret Word", "Everyone in the same room. Talk out loud, vote here.")
+
+	-- Name field
+	ui.label(self, "Your name", PAD, 212, { font = "bold", size = 15 })
+	local field = ui.rect(self, PAD, 228, CW, 60, { color = ui.SURFACE, radius = 14 })
+	ui.rect(self, PAD, 228, CW, 60, { color = self.editing and ui.ACCENT or ui.LINE, radius = 14, outline = true })
+	self.name_field = field
+	local shown = self.editing and (self.draft .. self.marked .. "|") or self.name
+	ui.label(self, shown, PAD + 18, 258, { font = "bold", size = 20 })
+	if self.editing then
+		ui.link(self, "Done", ui.W - PAD - 16, 258, function() finish_editing(self) end)
+		ui.label(self, "Others will see this name in the game.", PAD, 306, { size = 13, color = ui.DIM })
 	else
-		text(self, "No Wi-Fi / hotspot network found", 885, 1.5, ERROR_COLOR)
+		ui.label(self, "Edit", ui.W - PAD - 16, 258, { font = "bold", size = 14, color = ui.ACCENT, align = "right" })
+		ui.on_tap(self, field, function() start_editing(self) end)
 	end
 
-	button(self, "Host game", 700, function()
+	if message then
+		ui.label(self, message, CX, 560, { size = 14, color = ui.DANGER, align = "center", width = 320, top = true })
+	end
+
+	local ips = net.local_ips()
+	if #ips > 0 then
+		ui.label(self, "On network " .. table.concat(ips, ", "), CX, 660, { size = 13, color = ui.DIM, align = "center" })
+	else
+		ui.label(self, "No Wi-Fi or hotspot network found", CX, 660, { size = 13, color = ui.DANGER, align = "center" })
+	end
+
+	ui.button(self, "Host a game", PAD, BOTTOM_Y - BUTTON_H - 12, CW, BUTTON_H, function()
 		local ok, err = net.host(self.name)
 		if ok then
 			show_lobby(self)
@@ -155,29 +120,32 @@ function show_menu(self, message)
 			show_menu(self, err)
 		end
 	end)
-	button(self, "Join game", 570, function()
+	ui.button(self, "Join a game", PAD, BOTTOM_Y, CW, BUTTON_H, function()
 		net.scan()
 		show_scan(self, {})
-	end)
-
-	if message then
-		text(self, message, 420, 1.5, ERROR_COLOR)
-	end
+	end, { style = "secondary" })
 end
 
 function show_scan(self, hosts)
 	self.screen = "scan"
-	clear(self)
+	ui.clear(self)
 
-	text(self, "Join a game", 1010, 3)
+	header(self, "JOIN A GAME", "Find a game", "Looking on your Wi-Fi or hotspot…")
+
 	if #hosts == 0 then
-		text(self, "Searching for hosts...", 900, 2, DIM_COLOR)
-		text(self, "Make sure you're on the same Wi-Fi or hotspot", 850, 1.3, DIM_COLOR)
+		ui.circle(self, CX, 330, 72, ui.LINE, true)
+		ui.circle(self, CX, 330, 16, ui.ACCENT)
+		ui.label(self, "Searching for hosts…", CX, 400, { size = 15, color = ui.DIM, align = "center" })
+		ui.label(self, "Ask the host to tap “Host a game”.", CX, 426, { size = 13, color = ui.MUTED, align = "center" })
 	end
 
 	for i, h in ipairs(hosts) do
-		local label = ("%s  (%d/%d)"):format(h.name or h.ip, h.players or 0, h.max or net.MAX_PLAYERS)
-		button(self, label, 900 - (i - 1) * 110, function()
+		local y = 180 + (i - 1) * 82
+		local tile = ui.rect(self, PAD, y, CW, 72, { color = ui.SURFACE, radius = 14 })
+		ui.label(self, h.name or h.ip, PAD + 18, y + 26, { font = "bold", size = 17 })
+		ui.label(self, ("%d of %d players"):format(h.players or 0, h.max or net.MAX_PLAYERS), PAD + 18, y + 50, { size = 13, color = ui.DIM })
+		ui.label(self, "Join", ui.W - PAD - 18, y + 36, { font = "bold", size = 15, color = ui.ACCENT, align = "right" })
+		ui.on_tap(self, tile, function()
 			local ok, err = net.join(h.ip, h.port, self.name)
 			if ok then
 				show_lobby(self)
@@ -187,92 +155,83 @@ function show_scan(self, hosts)
 		end)
 	end
 
-	button(self, "Back", 120, function() show_menu(self) end)
+	ui.button(self, "Back", PAD, BOTTOM_Y, CW, BUTTON_H, function() show_menu(self) end, { style = "secondary" })
+end
+
+-- Pill-shaped chips that wrap onto new rows; returns the bottom y
+local function chips(self, labels, top)
+	local x, y = PAD, top
+	for _, text in ipairs(labels) do
+		local n = ui.label(self, text, 0, 0, { size = 14 })
+		local w = ui.text_width(n) + 28
+		gui.delete_node(n)
+		table.remove(self.nodes)
+		if x + w > ui.W - PAD then
+			x, y = PAD, y + 44
+		end
+		ui.rect(self, x, y, w, 36, { color = ui.SURFACE, radius = 18 })
+		ui.label(self, text, x + w / 2, y + 18, { size = 14, align = "center" })
+		x = x + w + 8
+	end
+	return y + 36
 end
 
 function show_lobby(self)
+	self.game = nil
 	self.screen = "lobby"
-	clear(self)
+	ui.clear(self)
 
-	text(self, "Lobby", 1010, 3)
-	if net.is_host() then
-		text(self, "Hosting on " .. table.concat(net.local_ips(), ", "), 940, 1.5, DIM_COLOR)
-	end
+	local hosting = net.is_host()
+	header(self, hosting and "YOU'RE HOSTING" or "LOCAL GAME", "Secret Word", "Everyone in the same room. Talk out loud, vote here.")
+	ui.link(self, "Leave", ui.W - PAD, 64, function() show_menu(self) end)
 
-	if #self.players == 0 then
-		text(self, "Joining...", 860, 2, DIM_COLOR)
-	end
+	ui.label(self, "Players", PAD, 190, { font = "bold", size = 15 })
+	ui.label(self, ("%d of %d"):format(#self.players, net.MAX_PLAYERS), ui.W - PAD, 190, { size = 14, color = ui.DIM, align = "right" })
+
 	local me = net.my_id()
-	for i, p in ipairs(self.players) do
-		local y = 860 - (i - 1) * 55
-		local color = player_color(p.color)
-
-		local swatch = gui.new_box_node(vmath.vector3(60, y, 0), vmath.vector3(34, 34, 0))
-		gui.set_color(swatch, color.rgb)
-		self.nodes[#self.nodes + 1] = swatch
-
-		local line = ("%s (%s)"):format(p.name, color.name)
-		if p.host then line = line .. " [host]" end
-		if p.id == me then line = line .. " - you" end
-		local n = text(self, line, y, 1.8, color.rgb)
-		gui.set_pivot(n, gui.PIVOT_W)
-		gui.set_position(n, vmath.vector3(95, y, 0))
-	end
-
-	if me then
-		button(self, "Change color", 380, function() net.change_color() end)
-	end
-
-	if net.is_host() then
-		button(self, ("Start game (%d players)"):format(#self.players), 250, function()
-			net.start_game()
-		end)
-	else
-		text(self, "Waiting for host to start...", 260, 2, DIM_COLOR)
-	end
-
-	button(self, "Leave", 120, function() show_menu(self) end)
-end
-
-function show_game(self)
-	self.screen = "game"
-	clear(self)
-
-	text(self, "Game started!", 1010, 3)
-	local me = net.my_id()
-	for _, p in ipairs(self.players) do
-		if p.id == me then
-			local color = player_color(p.color)
-			text(self, "You are " .. color.name .. " - tap anywhere", 950, 1.8, color.rgb)
+	local tile_w, tile_h, gap = (CW - 10) / 2, 58, 10
+	for i = 1, net.MAX_PLAYERS do
+		local x = PAD + ((i - 1) % 2) * (tile_w + gap)
+		local y = 208 + math.floor((i - 1) / 2) * (tile_h + gap)
+		local p = self.players[i]
+		if p then
+			ui.rect(self, x, y, tile_w, tile_h, { color = ui.SURFACE, radius = 14 })
+			if p.id == me then
+				ui.rect(self, x, y, tile_w, tile_h, { color = ui.ACCENT, radius = 14, outline = true })
+			end
+			ui.avatar(self, x + 28, y + tile_h / 2, 32, p.color, p.name)
+			local tags = {}
+			if p.id == me then tags[#tags + 1] = "You" end
+			if p.host then tags[#tags + 1] = (#tags > 0 and "host" or "Host") end
+			if #tags > 0 then
+				ui.label(self, p.name, x + 54, y + 21, { font = "bold", size = 15 })
+				ui.label(self, table.concat(tags, " · "), x + 54, y + 40, { size = 12, color = ui.DIM })
+			else
+				ui.label(self, p.name, x + 54, y + tile_h / 2, { font = "bold", size = 15 })
+			end
+		else
+			ui.rect(self, x, y, tile_w, tile_h, { color = ui.LINE_STRONG, radius = 14, outline = true })
+			ui.label(self, "Open seat", x + tile_w / 2, y + tile_h / 2, { size = 14, color = ui.DIM, align = "center" })
 		end
 	end
-	button(self, "Leave", 120, function() show_menu(self) end)
-end
 
--- A colored square with the player's name, popping in where they tapped and fading out.
-local function show_tap(self, tap)
-	if self.screen ~= "game" or not tap.x or not tap.y then
-		return
+	local s = secret_word.SETTINGS
+	ui.label(self, "Game settings", PAD, 500, { font = "bold", size = 15 })
+	chips(self, {
+		("%d rounds"):format(s.rounds),
+		("%d s per clue"):format(s.clue_time),
+		("%d min discussion"):format(s.discuss_time / 60),
+		"1 impostor",
+	}, 518)
+
+	if hosting then
+		ui.label(self, "Others join from the same Wi-Fi: " .. table.concat(net.local_ips(), ", "), CX, 728, { size = 13, color = ui.DIM, align = "center" })
+		local enough = #self.players >= secret_word.MIN_PLAYERS
+		ui.button(self, enough and "Start game" or ("Need %d players to start"):format(secret_word.MIN_PLAYERS),
+			PAD, BOTTOM_Y, CW, BUTTON_H, function() net.start_game() end, { enabled = enough })
+	else
+		ui.label(self, "Waiting for the host to start…", CX, BOTTOM_Y + BUTTON_H / 2, { size = 15, color = ui.DIM, align = "center" })
 	end
-	local color = player_color(tap.color)
-
-	local marker = gui.new_box_node(vmath.vector3(tap.x, tap.y, 0), vmath.vector3(MARKER_SIZE, MARKER_SIZE, 0))
-	gui.set_color(marker, color.rgb)
-
-	local label = gui.new_text_node(vmath.vector3(0, -MARKER_SIZE, 0), tap.name)
-	gui.set_font(label, "default")
-	gui.set_scale(label, vmath.vector3(1.5, 1.5, 1))
-	gui.set_color(label, color.rgb)
-	gui.set_parent(label, marker)
-	gui.set_inherit_alpha(label, true)
-
-	self.markers[marker] = true
-	gui.set_scale(marker, vmath.vector3(0.2, 0.2, 1))
-	gui.animate(marker, "scale", vmath.vector3(1, 1, 1), gui.EASING_OUTBACK, 0.25)
-	gui.animate(marker, "color.w", 0, gui.EASING_INQUAD, 0.6, MARKER_LIFETIME, function(_, node)
-		self.markers[node] = nil
-		gui.delete_node(node)
-	end)
 end
 
 ---------------------------------------------------------------------------
@@ -291,86 +250,113 @@ local function on_net(self, event, data)
 		end
 	elseif event == "welcome" then
 		if self.screen == "lobby" then
-			show_lobby(self) -- refresh "(you)" marker
+			show_lobby(self) -- refresh the "You" tag
 		end
 	elseif event == "start" then
-		show_game(self)
-	elseif event == "tap" then
-		show_tap(self, data)
+		-- Only the host runs the rules; everyone (host included) then gets "game" views
+		if net.is_host() then
+			self.game = secret_word.new(self.players, function(id, view) net.send_to(id, view) end)
+		end
+	elseif event == "action" then
+		if self.game then
+			self.game:on_action(data.from, data.data)
+		end
+	elseif event == "game" then
+		screens.render(self, data)
+	elseif event == "to_lobby" then
+		show_lobby(self)
 	elseif event == "player_left" then
 		local fmt = LEFT_MESSAGES[data.reason] or "%s left"
-		toast(self, fmt:format(data.name), player_color(data.color).rgb)
+		ui.toast(self, fmt:format(data.name), ui.player_color(data.color).fill)
+		if self.game then
+			self.game:on_player_left(data.id)
+		end
 	elseif event == "connection" then
-		set_banner(self, not data.stable)
+		ui.set_banner(self, not data.stable)
 	elseif event == "disconnected" then
 		show_menu(self, data)
 	end
-	raise_overlays(self)
+	ui.raise_overlays(self)
 end
 
 ---------------------------------------------------------------------------
 -- Lifecycle
 ---------------------------------------------------------------------------
 
-local function device_name()
-	local info = sys.get_sys_info() or {}
-	for _, key in ipairs({ "device_model", "system_name" }) do
-		local v = info[key]
-		if type(v) == "string" and v ~= "" then
-			return v
-		end
-	end
-	return "Player"
-end
-
 function init(self)
-	self.nodes = {}
-	self.buttons = {}
-	self.markers = {}
-	self.toasts = {}
+	ui.init(self)
 	self.players = {}
 	self.screen = "menu"
-
-	-- Shown on clients when the host has been silent for a while
-	self.banner = gui.new_box_node(vmath.vector3(CENTER_X, HEIGHT - 30, 0), vmath.vector3(WIDTH, 60, 0))
-	gui.set_color(self.banner, WARNING_COLOR)
-	local banner_text = gui.new_text_node(vmath.vector3(0, 0, 0), "Connection unstable - waiting for host...")
-	gui.set_font(banner_text, "default")
-	gui.set_scale(banner_text, vmath.vector3(1.6, 1.6, 1))
-	gui.set_color(banner_text, vmath.vector4(0, 0, 0, 1))
-	gui.set_parent(banner_text, self.banner)
-	gui.set_enabled(self.banner, false)
+	self.editing = false
+	self.leave = function() show_menu(self) end -- used by the game screens
 
 	msg.post(".", "acquire_input_focus")
 	math.randomseed(os.time())
-	self.name = device_name() .. " " .. math.random(10, 99)
+	self.name = load_name()
 
+	ui.init_overlays(self)
 	net.set_listener(function(event, data) on_net(self, event, data) end)
 	show_menu(self)
 end
 
 function update(self, dt)
 	net.update(dt)
+	if self.game then
+		self.game:update(dt)
+	end
+	ui.update(self)
+end
+
+local TEXT = hash("text")
+local MARKED_TEXT = hash("marked_text")
+local BACKSPACE = hash("backspace")
+local ENTER = hash("enter")
+local TOUCH = hash("touch")
+
+-- Typing into the name field
+local function edit_input(self, action_id, action)
+	if action_id == TEXT then
+		local text = action.text:gsub("[%c]", "")
+		if utf8_len(self.draft .. text) <= MAX_NAME_LENGTH then
+			self.draft = self.draft .. text
+		end
+		self.marked = ""
+	elseif action_id == MARKED_TEXT then
+		self.marked = action.text or ""
+	elseif action_id == BACKSPACE and (action.pressed or action.repeated) then
+		self.draft = self.draft:gsub("[%z\1-\127\194-\244][\128-\191]*$", "")
+	elseif action_id == ENTER and action.pressed then
+		finish_editing(self)
+		return true
+	else
+		return false
+	end
+	show_menu(self, self.message)
+	return true
 end
 
 function on_input(self, action_id, action)
-	if action_id ~= hash("touch") or not action.pressed then
-		return
-	end
-	for _, b in ipairs(self.buttons) do
-		if gui.pick_node(b.node, action.x, action.y) then
-			b.on_click()
-			raise_overlays(self)
+	if self.editing then
+		if edit_input(self, action_id, action) then
 			return true
 		end
+		-- Tapping anywhere outside the field finishes editing (and the tap still counts)
+		if action_id == TOUCH and action.pressed and not gui.pick_node(self.name_field, action.x, action.y) then
+			finish_editing(self)
+		end
 	end
-	if self.screen == "game" then
-		net.tap(action.x, action.y)
+
+	if action_id ~= TOUCH then
+		return
+	end
+	if ui.on_input(self, action) then
+		ui.raise_overlays(self)
 		return true
 	end
 end
 
 function final(self)
+	gui.hide_keyboard()
 	net.set_listener(nil)
 	net.stop()
 end

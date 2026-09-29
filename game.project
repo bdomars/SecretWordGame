@@ -9,9 +9,14 @@ game_binding = /input/game.input_bindingc
 use_accelerometer = 0
 
 [display]
-width = 640
-height = 1136
+width = 780
+height = 1688
 high_dpi = 1
+
+[render]
+clear_color_red = 0.09
+clear_color_green = 0.086
+clear_color_blue = 0.122
 
 [ios]
 app_icon_120x120 = /assets/app_icons/icon_120.png

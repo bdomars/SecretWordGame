@@ -1,0 +1,51 @@
+images {
+  image: "/ui/images/circle.png"
+}
+images {
+  image: "/ui/images/outline24.png"
+}
+images {
+  image: "/ui/images/outline28.png"
+}
+images {
+  image: "/ui/images/outline32.png"
+}
+images {
+  image: "/ui/images/outline36.png"
+}
+images {
+  image: "/ui/images/outline48.png"
+}
+images {
+  image: "/ui/images/outline56.png"
+}
+images {
+  image: "/ui/images/ring.png"
+}
+images {
+  image: "/ui/images/round16.png"
+}
+images {
+  image: "/ui/images/round24.png"
+}
+images {
+  image: "/ui/images/round28.png"
+}
+images {
+  image: "/ui/images/round32.png"
+}
+images {
+  image: "/ui/images/round36.png"
+}
+images {
+  image: "/ui/images/round48.png"
+}
+images {
+  image: "/ui/images/round56.png"
+}
+images {
+  image: "/ui/images/round8.png"
+}
+margin: 2
+extrude_borders: 2
+inner_padding: 0

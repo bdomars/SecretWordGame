@@ -1,6 +1,19 @@
 script: "/lobby/lobby.gui_script"
 fonts {
-  name: "default"
-  font: "/builtins/fonts/default.font"
+  name: "heading"
+  font: "/fonts/heading.font"
+}
+fonts {
+  name: "body"
+  font: "/fonts/body.font"
+}
+fonts {
+  name: "bold"
+  font: "/fonts/bold.font"
+}
+textures {
+  name: "ui"
+  texture: "/ui/ui.atlas"
 }
 adjust_reference: ADJUST_REFERENCE_PARENT
+max_nodes: 1024

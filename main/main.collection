@@ -1,28 +1,6 @@
 name: "main"
 scale_along_z: 0
 embedded_instances {
-  id: "go"
-  data: "embedded_components {\n"
-  "  id: \"background\"\n"
-  "  type: \"sprite\"\n"
-  "  data: \"default_animation: \\\"background\\\"\\n"
-  "material: \\\"/builtins/materials/sprite.material\\\"\\n"
-  "textures {\\n"
-  "  sampler: \\\"texture_sampler\\\"\\n"
-  "  texture: \\\"/main/main.atlas\\\"\\n"
-  "}\\n"
-  "\"\n"
-  "  position {\n"
-  "    z: -0.5\n"
-  "  }\n"
-  "}\n"
-  ""
-  position {
-    x: 320.0
-    y: 568.0
-  }
-}
-embedded_instances {
   id: "lobby"
   data: "components {\n"
   "  id: \"lobby\"\n"
@@ -45,7 +23,7 @@ embedded_instances {
   "}\n"
   ""
   position {
-    x: 320.0
-    y: 568.0
+    x: 390.0
+    y: 844.0
   }
 }

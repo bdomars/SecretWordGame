@@ -17,7 +17,7 @@ M.DISCOVERY_PORT = 47801
 M.MAX_PLAYERS = 8
 M.NUM_COLORS = 8 -- colors are indices 1..NUM_COLORS; the UI decides what they look like
 
-local PROTOCOL = "LTG2"
+local PROTOCOL = "LTG3"
 local PROBE = PROTOCOL .. "?"
 local HEARTBEAT_INTERVAL = 1.0
 local WARN_AFTER = 2.5 -- silence before a client reports an unstable connection
@@ -194,9 +194,6 @@ local function next_free_color(current, owner)
 	return current
 end
 
-local function make_tap(id, name, color, x, y)
-	return { t = "tap", id = id, name = name, color = color, x = math.floor(x), y = math.floor(y) }
-end
 
 local function broadcast(msg)
 	for _, c in ipairs(peers) do
@@ -234,10 +231,8 @@ local function host_handle(c, msg)
 	elseif msg.t == "color" and c.id and not started then
 		c.color = next_free_color(c.color, c)
 		lobby_changed()
-	elseif msg.t == "tap" and c.id and tonumber(msg.x) and tonumber(msg.y) then
-		local tap = make_tap(c.id, c.name, c.color, tonumber(msg.x), tonumber(msg.y))
-		broadcast(tap)
-		emit("tap", tap)
+	elseif msg.t == "act" and c.id and type(msg.data) == "table" then
+		emit("action", { from = c.id, data = msg.data })
 	elseif msg.t == "bye" then
 		c.said_bye = true
 	end
@@ -350,6 +345,35 @@ function M.start_game()
 	emit("start")
 end
 
+-- Host: game over, everyone back to the lobby (which opens for joining again).
+function M.end_game()
+	if mode ~= "host" then
+		return
+	end
+	started = false
+	broadcast({ t = "to_lobby" })
+	emit("to_lobby")
+	lobby_changed()
+end
+
+-- Host: send a game message to one player (id 1 is the host itself).
+-- Per-player sends let each phone get only what it may see, e.g. the impostor never gets the word.
+function M.send_to(id, data)
+	if mode ~= "host" then
+		return
+	end
+	if id == 1 then
+		emit("game", data)
+		return
+	end
+	for _, c in ipairs(peers) do
+		if c.id == id then
+			queue(c, { t = "game", data = data })
+			return
+		end
+	end
+end
+
 ---------------------------------------------------------------------------
 -- Scan (discovery client)
 ---------------------------------------------------------------------------
@@ -440,8 +464,10 @@ local function client_update(dt)
 			emit("lobby", msg.players)
 		elseif msg.t == "start" then
 			emit("start")
-		elseif msg.t == "tap" then
-			emit("tap", msg)
+		elseif msg.t == "game" then
+			emit("game", msg.data)
+		elseif msg.t == "to_lobby" then
+			emit("to_lobby")
 		elseif msg.t == "left" then
 			emit("player_left", msg)
 		elseif msg.t == "reject" then
@@ -498,15 +524,12 @@ end
 -- Shared
 ---------------------------------------------------------------------------
 
--- In-game tap at (x, y) in the project's logical coordinates (640x1136).
--- Goes through the host, which relays it to everyone (including the sender).
-function M.tap(x, y)
+-- Send a game action to the host's game logic; it arrives there as an "action" event.
+function M.act(data)
 	if mode == "host" then
-		local tap = make_tap(1, my_name, host_color, x, y)
-		broadcast(tap)
-		emit("tap", tap)
+		emit("action", { from = 1, data = data })
 	elseif mode == "client" then
-		queue(conn, { t = "tap", x = math.floor(x), y = math.floor(y) })
+		queue(conn, { t = "act", data = data })
 	end
 end
 
@@ -536,7 +559,9 @@ end
 --   "welcome"      my player id (client)
 --   "lobby"        player list { id, name, color, host }
 --   "start"        host started the game
---   "tap"          { id, name, color, x, y }
+--   "action"       host only: { from = player id, data } sent with M.act()
+--   "game"         game data for this player, sent by the host with M.send_to()
+--   "to_lobby"     game over, back to the lobby
 --   "player_left"  { id, name, color, reason } reason: "left" | "lost connection" | "disconnected"
 --   "connection"   { stable = bool } client only; silence from host > WARN_AFTER, or recovered
 --   "disconnected" reason string; we are no longer in a game

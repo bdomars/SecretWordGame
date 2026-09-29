@@ -1,0 +1,6 @@
+script: "/lobby/lobby.gui_script"
+fonts {
+  name: "default"
+  font: "/builtins/fonts/default.font"
+}
+adjust_reference: ADJUST_REFERENCE_PARENT

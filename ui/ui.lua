@@ -61,14 +61,14 @@ end
 ---------------------------------------------------------------------------
 
 function M.init(self)
-	self.nodes, self.buttons, self.holds, self.timers = {}, {}, {}, {}
+	self.nodes, self.buttons, self.holds, self.timers, self.texts = {}, {}, {}, {}, {}
 end
 
 function M.clear(self)
 	for _, n in ipairs(self.nodes) do
 		gui.delete_node(n)
 	end
-	self.nodes, self.buttons, self.holds, self.timers = {}, {}, {}, {}
+	self.nodes, self.buttons, self.holds, self.timers, self.texts = {}, {}, {}, {}, {}
 end
 
 local function track(self, n)
@@ -101,10 +101,33 @@ function M.circle(self, cx, cy, d, color, ring)
 	return track(self, n)
 end
 
+-- Real size of a text node's text in GUI units (scale included), measured with its font.
+-- Wrapped text (line break on) is measured at the node's width, so height covers all lines.
+local function text_size(n)
+	local options = {} -- must be a table: this Defold version rejects nil, despite the docs
+	if gui.get_line_break(n) then
+		options = { width = gui.get_size(n).x, line_break = true, leading = gui.get_leading(n), tracking = gui.get_tracking(n) }
+	end
+	local m = resource.get_text_metrics(gui.get_font_resource(gui.get_font(n)), gui.get_text(n), options)
+	local scale = gui.get_scale(n)
+	return m.width * scale.x, m.height * scale.y
+end
+
+-- Width / height of a text node in storyboard px
+function M.text_width(n)
+	return (text_size(n)) / S
+end
+
+function M.text_height(n)
+	local _, h = text_size(n)
+	return h / S
+end
+
 -- Text. x is the left edge / center / right edge depending on `align`;
 -- y is the vertical center of the text, or its top edge with opts.top.
 -- opts: font ("body" | "bold" | "heading"), size (px), color, align ("left" | "center" | "right"),
---       width (wrap at this many px), top
+--       width (wrap at this many px), top,
+--       max_width (single-line text shrinks to fit this many px instead of overflowing)
 function M.label(self, str, x, y, opts)
 	opts = opts or {}
 	local font = opts.font or "body"
@@ -123,19 +146,38 @@ function M.label(self, str, x, y, opts)
 	if opts.width then
 		gui.set_line_break(n, true)
 		gui.set_size(n, vmath.vector3(opts.width * S / scale, 0, 0))
+	elseif opts.max_width then
+		local w = M.text_width(n)
+		if w > opts.max_width then
+			local fitted = scale * opts.max_width / w
+			gui.set_scale(n, vmath.vector3(fitted, fitted, 1))
+		end
 	end
+	self.texts[#self.texts + 1] = n
 	return track(self, n)
 end
 
--- Width in GUI units of a text node's text, including its scale
-local function node_text_width(n)
-	local metrics = resource.get_text_metrics(gui.get_font_resource(gui.get_font(n)), gui.get_text(n))
-	return metrics.width * gui.get_scale(n).x
+-- Width in px of single-line text, without adding anything to the screen
+function M.measure(str, font, size)
+	local n = gui.new_text_node(vmath.vector3(0, 0, 0), str)
+	gui.set_font(n, font or "body")
+	local scale = (size or 15) * S / FONT_BASE[font or "body"]
+	gui.set_scale(n, vmath.vector3(scale, scale, 1))
+	local w = M.text_width(n)
+	gui.delete_node(n)
+	return w
 end
 
--- Width of a text node in storyboard px
-function M.text_width(n)
-	return node_text_width(n) / S
+-- Start a layer that covers what's below (e.g. a popup): the layout check then only
+-- compares text drawn from here on
+function M.new_layer(self)
+	self.texts = {}
+end
+
+-- Move/resize a node made with ui.rect (e.g. a background sized after measuring its text)
+function M.set_rect(n, x, y, w, h)
+	gui.set_position(n, pos(x + w / 2, y + h / 2))
+	gui.set_size(n, vmath.vector3(w * S, h * S, 0))
 end
 
 -- Button, top-left at (x, y). opts:
@@ -161,6 +203,7 @@ function M.button(self, label, x, y, w, h, on_click, opts)
 	if label and label ~= "" then
 		M.label(self, label, x + w / 2, y + h / 2, {
 			font = opts.font or "bold", size = opts.size or 18, align = "center", color = opts.text_color or ink,
+			max_width = w - 24,
 		})
 	end
 	if enabled and on_click then
@@ -289,6 +332,69 @@ function M.on_input(self, action)
 end
 
 ---------------------------------------------------------------------------
+-- Layout check (used by the debug screen gallery)
+---------------------------------------------------------------------------
+
+local PIVOT_LEFT, PIVOT_RIGHT, PIVOT_TOP
+local function pivot_sets()
+	PIVOT_LEFT = { [gui.PIVOT_W] = true, [gui.PIVOT_NW] = true, [gui.PIVOT_SW] = true }
+	PIVOT_RIGHT = { [gui.PIVOT_E] = true, [gui.PIVOT_NE] = true, [gui.PIVOT_SE] = true }
+	PIVOT_TOP = { [gui.PIVOT_N] = true, [gui.PIVOT_NW] = true, [gui.PIVOT_NE] = true }
+end
+
+-- Screen-space box of a label's text in GUI units: x0, y0 (bottom), x1, y1 (top)
+function M.text_bounds(n)
+	if not PIVOT_LEFT then
+		pivot_sets()
+	end
+	local w, h = text_size(n)
+	local p, pivot = gui.get_position(n), gui.get_pivot(n)
+	local x0 = PIVOT_LEFT[pivot] and p.x or (PIVOT_RIGHT[pivot] and p.x - w or p.x - w / 2)
+	local y1 = PIVOT_TOP[pivot] and p.y or p.y + h / 2
+	return x0, y1 - h, x0 + w, y1
+end
+
+-- Labels on the current screen whose text overlaps another label's, or runs off screen.
+-- Returns a list of { nodes = { ... }, text = "description" }.
+function M.layout_issues(self)
+	local issues, boxes = {}, {}
+	local slack = 2 * S -- ignore touching edges
+	for _, n in ipairs(self.texts) do
+		local text = gui.get_text(n)
+		if text ~= "" then
+			local x0, y0, x1, y1 = M.text_bounds(n)
+			boxes[#boxes + 1] = { n = n, text = text, x0 = x0, y0 = y0, x1 = x1, y1 = y1 }
+			if x0 < -slack or x1 > M.W * S + slack or y0 < -slack or y1 > M.H * S + slack then
+				issues[#issues + 1] = { nodes = { n }, text = ("off screen: %q"):format(text) }
+			end
+		end
+	end
+	for i = 1, #boxes do
+		for j = i + 1, #boxes do
+			local a, b = boxes[i], boxes[j]
+			local overlap_w = math.min(a.x1, b.x1) - math.max(a.x0, b.x0)
+			local overlap_h = math.min(a.y1, b.y1) - math.max(a.y0, b.y0)
+			if overlap_w > slack and overlap_h > slack then
+				issues[#issues + 1] = { nodes = { a.n, b.n }, text = ("overlap: %q / %q"):format(a.text, b.text) }
+			end
+		end
+	end
+	return issues
+end
+
+-- Highlight the issues found by M.layout_issues (red boxes over the text)
+function M.show_layout_issues(self, issues)
+	for _, issue in ipairs(issues) do
+		for _, n in ipairs(issue.nodes) do
+			local x0, y0, x1, y1 = M.text_bounds(n)
+			local box = gui.new_box_node(vmath.vector3((x0 + x1) / 2, (y0 + y1) / 2, 0), vmath.vector3(x1 - x0, y1 - y0, 0))
+			gui.set_color(box, vmath.vector4(1, 0.1, 0.1, 0.35))
+			track(self, box)
+		end
+	end
+end
+
+---------------------------------------------------------------------------
 -- Overlays: toasts and the connection banner. They live outside self.nodes so
 -- they survive screen redraws.
 ---------------------------------------------------------------------------
@@ -334,7 +440,7 @@ function M.toast(self, message, color)
 	end
 
 	local label = overlay_text(message, 14, color or M.TEXT)
-	local w = node_text_width(label) + 48 * S
+	local w = (text_size(label)) + 48 * S
 	local bg = gui.new_box_node(pos(M.W / 2, TOAST_Y), vmath.vector3(w, 36 * S, 0))
 	gui.set_color(bg, M.SURFACE)
 	gui.set_texture(bg, "ui")

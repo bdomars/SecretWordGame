@@ -6,6 +6,7 @@ local net = require "net.lobby_net"
 local ui = require "ui.ui"
 local secret_word = require "game.secret_word"
 local screens = require "game.screens"
+local gallery = require "debug.gallery"
 
 local PAD, CW = ui.PAD, ui.CONTENT_W
 local CX = ui.W / 2
@@ -112,6 +113,11 @@ function show_menu(self, message)
 	ui.clear(self)
 
 	header(self, "LOCAL PARTY GAME", "Secret Word", "Everyone in the same room. Talk out loud, vote here.")
+	if gallery.enabled() and not gallery.active(self) then
+		ui.link(self, "Screens", ui.W - PAD, 64, function()
+			gallery.start(self, self.gallery_screens)
+		end)
+	end
 
 	-- Name field
 	ui.label(self, "Your name", PAD, 212, { font = "bold", size = 15 })
@@ -192,10 +198,7 @@ end
 local function chips(self, items, top)
 	local x, y = PAD, top
 	for _, item in ipairs(items) do
-		local n = ui.label(self, item.text, 0, 0, { size = 14 })
-		local w = ui.text_width(n) + 28
-		gui.delete_node(n)
-		table.remove(self.nodes)
+		local w = ui.measure(item.text, "body", 14) + 28
 		if x + w > ui.W - PAD then
 			x, y = PAD, y + 44
 		end
@@ -224,8 +227,9 @@ local function settings_popup(self, key)
 		show_lobby(self)
 	end
 
-	-- While the popup is open, only it reacts to taps
+	-- While the popup is open, only it reacts to taps (and only its text is visible)
 	self.buttons = {}
+	ui.new_layer(self)
 	local backdrop = ui.rect(self, 0, 0, ui.W, ui.H, { color = vmath.vector4(0, 0, 0, 0.6) })
 	local top = 520
 	local sheet = ui.rect(self, 0, top, ui.W, ui.H - top + 40, { color = ui.SURFACE, radius = 28 })
@@ -276,11 +280,12 @@ function show_lobby(self)
 			local tags = {}
 			if p.id == me then tags[#tags + 1] = "You" end
 			if p.host then tags[#tags + 1] = (#tags > 0 and "host" or "Host") end
+			local name_width = tile_w - 62
 			if #tags > 0 then
-				ui.label(self, p.name, x + 54, y + 21, { font = "bold", size = 15 })
+				ui.label(self, p.name, x + 54, y + 21, { font = "bold", size = 15, max_width = name_width })
 				ui.label(self, table.concat(tags, " · "), x + 54, y + 40, { size = 12, color = ui.DIM })
 			else
-				ui.label(self, p.name, x + 54, y + tile_h / 2, { font = "bold", size = 15 })
+				ui.label(self, p.name, x + 54, y + tile_h / 2, { font = "bold", size = 15, max_width = name_width })
 			end
 		else
 			ui.rect(self, x, y, tile_w, tile_h, { color = ui.LINE_STRONG, radius = 14, outline = true })
@@ -308,7 +313,8 @@ function show_lobby(self)
 	chips(self, items, 518)
 
 	if hosting then
-		ui.label(self, "Others join from the same Wi-Fi: " .. table.concat(net.local_ips(), ", "), CX, 728, { size = 13, color = ui.DIM, align = "center" })
+		ui.label(self, "Others join from the same Wi-Fi (" .. (net.local_ips()[1] or "no network") .. ")", CX, 728,
+			{ size = 13, color = ui.DIM, align = "center", max_width = CW })
 		local enough = #self.players >= secret_word.MIN_PLAYERS
 		ui.button(self, enough and "Start game" or ("Need %d players to start"):format(secret_word.MIN_PLAYERS),
 			PAD, BOTTOM_Y, CW, BUTTON_H, function() net.start_game() end, { enabled = enough })
@@ -382,6 +388,12 @@ function init(self)
 	self.screen = "menu"
 	self.editing = false
 	self.leave = function() show_menu(self) end -- used by the game screens
+	-- The screens the debug gallery draws with
+	self.gallery_screens = {
+		menu = show_menu, scan = show_scan, lobby = show_lobby, render = screens.render,
+		exit = function() show_menu(self) end,
+	}
+	self.auto_check = gallery.wants_auto_check()
 
 	msg.post(".", "acquire_input_focus")
 	math.randomseed(os.time())
@@ -393,6 +405,12 @@ function init(self)
 end
 
 function update(self, dt)
+	if self.auto_check then
+		if gallery.auto_check_step(self, self.gallery_screens) then
+			self.auto_check = false
+		end
+		return
+	end
 	net.update(dt)
 	if self.game then
 		self.game:update(dt)
@@ -429,6 +447,16 @@ local function edit_input(self, action_id, action)
 end
 
 function on_input(self, action_id, action)
+	if gallery.active(self) then
+		if gallery.on_input(self, action_id, action) then
+			return true
+		end
+		if action_id == TOUCH and ui.on_input(self, action) then
+			ui.raise_overlays(self)
+		end
+		return true
+	end
+
 	if self.editing then
 		if edit_input(self, action_id, action) then
 			return true

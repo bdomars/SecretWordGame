@@ -64,7 +64,7 @@ local function card_contents(self, v, top, h)
 	if v.impostor then
 		ui.label(self, "You're the impostor", CX, mid + 14, { font = "heading", size = 30, color = ink, align = "center" })
 	else
-		ui.label(self, v.word, CX, mid + 14, { font = "heading", size = 44, color = ink, align = "center" })
+		ui.label(self, v.word, CX, mid + 14, { font = "heading", size = 44, color = ink, align = "center", max_width = CW - 40 })
 	end
 	return node
 end
@@ -91,10 +91,11 @@ function render.card(self, v)
 		card = ui.rect(self, PAD, top, CW, h, { color = fill, radius = 28 })
 		ui.label(self, "CATEGORY · " .. v.category:upper(), CX, mid - 100, { font = "bold", size = 14, color = ink, align = "center" })
 		if v.impostor then
-			ui.label(self, "You're the impostor", CX, mid - 70, { font = "heading", size = 44, color = ink, align = "center", width = 290, top = true })
-			ui.label(self, "You don't know the word. Listen to the clues and blend in.", CX, mid + 50, { size = 15, color = ink, align = "center", width = 250, top = true })
+			local heading = ui.label(self, "You're the impostor", CX, mid - 70, { font = "heading", size = 44, color = ink, align = "center", width = 290, top = true })
+			ui.label(self, "You don't know the word. Listen to the clues and blend in.", CX, mid - 70 + ui.text_height(heading) + 16,
+				{ size = 15, color = ink, align = "center", width = 250, top = true })
 		else
-			ui.label(self, v.word, CX, mid - 20, { font = "heading", size = #v.word > 9 and 44 or 60, color = ink, align = "center" })
+			ui.label(self, v.word, CX, mid - 20, { font = "heading", size = 60, color = ink, align = "center", max_width = CW - 40 })
 			ui.label(self, "Give clues that prove you know it, without handing it to the impostor.", CX, mid + 40, { size = 15, color = ink, align = "center", width = 250, top = true })
 		end
 	else
@@ -203,7 +204,7 @@ function render.vote(self, v)
 		ui.rect(self, PAD, 180, CW, 300, { color = ui.SURFACE, radius = 24 })
 		ui.label(self, "You voted for", CX, 228, { size = 15, color = ui.DIM, align = "center" })
 		ui.avatar(self, CX, 300, 80, p.color, p.name)
-		ui.label(self, p.name, CX, 376, { font = "heading", size = 30, align = "center" })
+		ui.label(self, p.name, CX, 376, { font = "heading", size = 30, align = "center", max_width = CW - 40 })
 		ui.label(self, "Waiting for the others…", CX, 424, { size = 15, color = ui.DIM, align = "center" })
 	else
 		local tile_w, tile_h, gap = (CW - 12) / 2, 104, 12
@@ -216,7 +217,7 @@ function render.vote(self, v)
 				local tile = ui.rect(self, x, y, tile_w, tile_h, { color = picked and ui.SURFACE_SELECTED or ui.SURFACE, radius = 18 })
 				ui.rect(self, x, y, tile_w, tile_h, { color = picked and ui.ACCENT or ui.LINE, radius = 18, outline = true })
 				ui.avatar(self, x + tile_w / 2, y + 40, 40, p.color, p.name)
-				ui.label(self, p.name, x + tile_w / 2, y + 80, { font = "bold", size = 16, align = "center" })
+				ui.label(self, p.name, x + tile_w / 2, y + 80, { font = "bold", size = 16, align = "center", max_width = tile_w - 16 })
 				ui.on_tap(self, tile, function()
 					self.vote_pick = p.id
 					M.render(self, self.view)
@@ -249,7 +250,7 @@ local function vote_bars(self, v, rows, top, row_gap, show_from)
 	local y = top
 	for _, r in ipairs(rows) do
 		local is_imp = r.id == v.impostor_id
-		ui.label(self, name(v, r.id), PAD, y + 13, { font = "bold", size = 15 })
+		ui.label(self, name(v, r.id), PAD, y + 13, { font = "bold", size = 15, max_width = 70 })
 		local w = math.max(44, 200 * r.count / max)
 		local fill = is_imp and ui.DANGER or (r.id == v.accused and ui.MUTED or ui.LINE_STRONG)
 		ui.rect(self, PAD + 76, y, w, 26, { color = fill, radius = 8 })
@@ -279,24 +280,31 @@ function render.guess(self, v)
 	vote_bars(self, v, rows, 92, 34)
 
 	if me == v.impostor_id then
-		ui.rect(self, PAD, 248, CW, 130, { color = ui.SURFACE, radius = 24 })
-		ui.rect(self, PAD, 248, CW, 130, { color = ui.DANGER, radius = 24, outline = true })
-		ui.label(self, "They got you.\nPick the word to steal it.", PAD + 20, 266, { font = "heading", size = 26, width = 300, top = true })
-		ui.label(self, "CATEGORY · " .. v.category:upper(), PAD + 20, 352, { font = "bold", size = 13, color = ui.DIM })
-		ui.countdown(self, v.ends_in, ui.W - PAD - 20, 352, { font = "bold", size = 15, color = ui.ACCENT, align = "right" })
+		local card_top = 248
+		local card = ui.rect(self, PAD, card_top, CW, 130, { color = ui.SURFACE, radius = 24 })
+		local outline = ui.rect(self, PAD, card_top, CW, 130, { color = ui.DANGER, radius = 24, outline = true })
+		local heading = ui.label(self, "They got you.\nPick the word to steal it.", PAD + 20, card_top + 18, { font = "heading", size = 26, width = 300, top = true })
+		local info_y = card_top + 18 + ui.text_height(heading) + 16
+		ui.label(self, "CATEGORY · " .. v.category:upper(), PAD + 20, info_y, { font = "bold", size = 13, color = ui.DIM })
+		ui.countdown(self, v.ends_in, ui.W - PAD - 20, info_y, { font = "bold", size = 15, color = ui.ACCENT, align = "right" })
+		local card_h = info_y + 22 - card_top
+		ui.set_rect(card, PAD, card_top, CW, card_h)
+		ui.set_rect(outline, PAD, card_top, CW, card_h)
+		local choices_top = card_top + card_h + 22
 
 		local tile_w = (CW - 12) / 2
 		for i, word in ipairs(v.choices or {}) do
 			local x = PAD + ((i - 1) % 2) * (tile_w + 12)
-			local y = 400 + math.floor((i - 1) / 2) * 68
+			local y = choices_top + math.floor((i - 1) / 2) * 68
 			ui.button(self, word, x, y, tile_w, 56, function() net.act({ a = "guess", word = word }) end,
 				{ style = "tile", size = 16 })
 		end
 	else
 		local imp = find(v, v.impostor_id)
 		ui.avatar(self, CX, 360, 88, imp.color, imp.name)
-		ui.label(self, imp.name .. " was caught", CX, 440, { font = "heading", size = 30, align = "center", width = CW, top = true })
-		ui.label(self, "Waiting for their last guess at the word…", CX, 490, { size = 15, color = ui.DIM, align = "center", width = 300, top = true })
+		local heading = ui.label(self, imp.name .. " was caught", CX, 440, { font = "heading", size = 30, align = "center", width = CW, top = true })
+		ui.label(self, "Waiting for their last guess at the word…", CX, 440 + ui.text_height(heading) + 12,
+			{ size = 15, color = ui.DIM, align = "center", width = 300, top = true })
 		ui.countdown(self, v.ends_in, CX, 570, { font = "heading", size = 48, color = ui.ACCENT, align = "center" })
 	end
 end
@@ -340,7 +348,7 @@ local function score_rows(self, v, top, points, highlight_top)
 		end
 		ui.label(self, tostring(i), PAD + 16, y + 22, { size = 14, color = ui.DIM })
 		ui.avatar(self, PAD + 50, y + 22, 28, p.color, p.name)
-		ui.label(self, p.name, PAD + 74, y + 22, { font = "bold", size = 15, color = p.connected and ui.TEXT or ui.DIM })
+		ui.label(self, p.name, PAD + 74, y + 22, { font = "bold", size = 15, color = p.connected and ui.TEXT or ui.DIM, max_width = CW - 160 })
 		if points then
 			local gained = points[p.id]
 			ui.label(self, gained and ("+" .. gained) or "+0", ui.W - PAD - 56, y + 22, { size = 14, color = gained and ui.GOOD or ui.DIM, align = "right" })
@@ -355,22 +363,29 @@ function render.result(self, v)
 	local ink = players_won == true and ui.ON_ACCENT or (players_won == false and ui.ON_DANGER or ui.TEXT)
 	top_bar(self, v, players_won == false and ui.DANGER or ui.ACCENT)
 
-	ui.rect(self, PAD, 92, CW, 156, { color = fill, radius = 24 })
-	ui.label(self, overline, PAD + 22, 118, { font = "bold", size = 13, color = ink })
-	ui.label(self, title, PAD + 22, 134, { font = "heading", size = 28, color = ink, width = CW - 44, top = true })
-	ui.label(self, detail, PAD + 22, 180, { size = 15, color = ink, width = CW - 44, top = true })
+	-- The banner grows with its text: a long word can wrap the title onto two lines
+	local banner_top = 92
+	local banner = ui.rect(self, PAD, banner_top, CW, 156, { color = fill, radius = 24 })
+	ui.label(self, overline, PAD + 22, banner_top + 26, { font = "bold", size = 13, color = ink })
+	local title_top = banner_top + 42
+	local title_node = ui.label(self, title, PAD + 22, title_top, { font = "heading", size = 28, color = ink, width = CW - 44, top = true })
+	local detail_top = title_top + ui.text_height(title_node) + 8
+	local detail_node = ui.label(self, detail, PAD + 22, detail_top, { size = 15, color = ink, width = CW - 44, top = true })
+	local banner_bottom = detail_top + ui.text_height(detail_node) + 22
+	ui.set_rect(banner, PAD, banner_top, CW, banner_bottom - banner_top)
 
+	local section_y = banner_bottom + 34 -- the section heading below the banner
 	local points = {}
 	for _, d in ipairs(v.deltas) do
 		points[d.id] = d.points
 	end
 
 	if self.show_scores then
-		ui.label(self, "Scores", PAD, 282, { font = "bold", size = 15 })
-		ui.label(self, "this round  ·  total", ui.W - PAD, 282, { size = 13, color = ui.DIM, align = "right" })
-		score_rows(self, v, 300, points)
+		ui.label(self, "Scores", PAD, section_y, { font = "bold", size = 15 })
+		ui.label(self, "this round  ·  total", ui.W - PAD, section_y, { size = 13, color = ui.DIM, align = "right" })
+		score_rows(self, v, section_y + 18, points)
 	else
-		ui.label(self, "How you voted", PAD, 282, { font = "bold", size = 15 })
+		ui.label(self, "How you voted", PAD, section_y, { font = "bold", size = 15 })
 		-- Group votes by who they were for
 		local groups, by_target = {}, {}
 		for _, vote in ipairs(v.votes) do
@@ -387,12 +402,12 @@ function render.result(self, v)
 		for _, g in ipairs(groups) do
 			g.from = table.concat(g.voters, ", ")
 		end
-		local y = 302
+		local y
 		if #groups == 0 then
-			ui.label(self, "Nobody voted.", PAD, 314, { size = 14, color = ui.DIM })
-			y = 340
+			ui.label(self, "Nobody voted.", PAD, section_y + 32, { size = 14, color = ui.DIM })
+			y = section_y + 58
 		else
-			y = vote_bars(self, v, groups, 302, 34, true)
+			y = vote_bars(self, v, groups, section_y + 20, 34, true)
 		end
 
 		-- Who scored this round
@@ -431,9 +446,11 @@ function render.final(self, v)
 		end
 	end
 	local title = table.concat(winners, " & ") .. (#winners == 1 and " wins!" or " win!")
-	ui.label(self, title, PAD, 90, { font = "heading", size = 40, width = CW, top = true })
-	ui.label(self, v.reason or ("After %d rounds"):format(v.round), PAD, 172, { size = 15, color = ui.DIM })
-	score_rows(self, v, 200, nil, true)
+	-- A shared win ("Christopher & Anna win!") can take two lines; the rest follows the title
+	local title_node = ui.label(self, title, PAD, 90, { font = "heading", size = 40, width = CW, top = true })
+	local subtitle_y = 90 + ui.text_height(title_node) + 16
+	ui.label(self, v.reason or ("After %d rounds"):format(v.round), PAD, subtitle_y, { size = 15, color = ui.DIM })
+	score_rows(self, v, subtitle_y + 28, nil, true)
 
 	if net.is_host() then
 		ui.button(self, "Back to lobby", PAD, BOTTOM_Y, CW, BUTTON_H, function() net.end_game() end)

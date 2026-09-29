@@ -11,7 +11,7 @@ local PAD, CW = ui.PAD, ui.CONTENT_W
 local CX = ui.W / 2
 local BOTTOM_Y, BUTTON_H = 756, 56
 local MAX_NAME_LENGTH = 12
-local SAVE_FILE = sys.get_save_file("secret_word", "settings")
+local SAVE_FILE = sys.get_save_file("SecretWordGame", "settings")
 
 local LEFT_MESSAGES = {
 	["left"] = "%s left",

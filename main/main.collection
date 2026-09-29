@@ -8,22 +8,3 @@ embedded_instances {
   "}\n"
   ""
 }
-embedded_instances {
-  id: "camera"
-  data: "embedded_components {\n"
-  "  id: \"camera\"\n"
-  "  type: \"camera\"\n"
-  "  data: \"aspect_ratio: 1.0\\n"
-  "fov: 0.7854\\n"
-  "near_z: -1.0\\n"
-  "far_z: 1.0\\n"
-  "orthographic_projection: 1\\n"
-  "orthographic_mode: ORTHO_MODE_AUTO_COVER\\n"
-  "\"\n"
-  "}\n"
-  ""
-  position {
-    x: 390.0
-    y: 844.0
-  }
-}
